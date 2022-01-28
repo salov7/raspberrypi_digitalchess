@@ -1,0 +1,324 @@
+
+# initiate board
+import smbus
+import time
+import math
+import sys
+
+import threading
+
+# initiate chessboard
+from ChessBoard import ChessBoard
+import subprocess, time
+
+maxchess = ChessBoard()
+
+# initiate board parameters
+
+global btxt
+btxt = ''
+
+global chessBoardCalculatedMove
+chessBoardCalculatedMove = ""
+global chessBoardCalculatedMoveFlag
+chessBoardCalculatedMoveFlag = "false"
+
+# MUX stuff
+I2C_address = 0x71  # address of mux changed to avoid conflict with led driver
+I2C_bus_number = 1
+bus = smbus.SMBus(I2C_bus_number)
+# bus = smbus.SMBus(1) # Rev 2 Pi uses 1
+# this program scans 64 inputs on 4 MCP23017 port exapanders and returns changes
+mbrd = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF]  # mbrd is the 8 columns of the chess board this sets them to 11111111 : open w
+chcol = ["A", "B", "C", "D", "E", "F", "G", "H", 'X', 'Y']
+DEVICE = [0x21, 0x22, 0x23, 0x24]  # the 4 I2c Device address of the MCP23017s (A0-A2)
+GPIOn = [0x12, 0x13]
+IODIRA = 0x00  # APin direction register for first 8 ie 1 = input or 2= output
+IODIRB = 0x01  # B Pin direction register
+GPIOA = 0x12  # Register for inputs
+GPIOB = 0x13  # B Register for inputs
+GPPUA = 0x0C  # Register for Pull ups A
+GPPUB = 0x0D  # Register for Pull ups B
+
+# initiate stockfish chess engine
+
+engine = subprocess.Popen(
+    'stockfish',
+    universal_newlines=True,
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE, )
+
+
+def get():
+    # using the 'isready' command (engine has to answer 'readyok')
+    # to indicate current last line of stdout
+    stx = ""
+    engine.stdin.write('isready\n')
+    print('\nengine:')
+    while True:
+        text = engine.stdout.readline().strip()
+        if text == 'readyok':
+            break
+        if text != '':
+            print('\t' + text)
+        if text[0:8] == 'bestmove':
+            return text
+
+
+def sget():
+    # using the 'isready' command (engine has to answer 'readyok')
+    # to indicate current last line of stdout
+    stx = ""
+    engine.stdin.write('isready\n')
+    print('\nengine:')
+    while True:
+        text = engine.stdout.readline().strip()
+        # if text == 'readyok':
+        #   break
+        if text != '':
+            print('\t' + text)
+        if text[0:8] == 'bestmove':
+            mtext = text
+            return mtext
+
+
+def getboard():
+    """ gets a text string from the board """
+    global btxt
+
+    btxt = raw_input("\n Enter a board message: ").lower() #ovde
+
+    return btxt
+
+
+def sendboard(stxt):
+    """ sends a text string to the board """
+    print("\n send to board: " + stxt)
+
+
+def newgame():
+    get()
+    put('uci')
+    get()
+    put('setoption name Skill Level value ' + skill)
+    get()
+    put('setoption name Hash value 128')
+    get()
+    put('setoption name Best Book Move value true')
+    get()
+    put('setoption name OwnBook value true')
+    get()
+    put('uci')
+    get()
+    put('ucinewgame')
+    maxchess.resetBoard()
+    fmove = ""
+    return fmove
+
+
+def bmove(fmove):
+    """ assume we get a command of the form ma1a2 from board"""
+    fmove = fmove
+    # Get a move from the board
+    brdmove = bmessage[1:5].lower()
+    # now validate move
+    # if invalid, get reason & send back to board
+    #  maxchess.addTextMove(move)
+    if maxchess.addTextMove(brdmove) == False:
+        etxt = "error" + str(maxchess.getReason()) + brdmove
+        maxchess.printBoard()
+        sendboard(etxt)
+        return fmove
+
+    #  elif valid  make the move and send Fen to board
+
+    else:
+        maxchess.printBoard()
+        # maxfen = maxchess.getFEN()
+        # sendboard(maxfen)
+        # remove line below when working
+        raw_input("\n\nPress the enter key to continue")
+        print ("fmove")
+        print(fmove)
+        print ("brdmove")
+        print(brdmove)
+        fmove = fmove + " " + brdmove
+
+        cmove = "position startpos moves" + fmove
+        print (cmove)
+
+        #        if fmove == True :
+        #                move = "position startpos moves "+move
+        #        else:
+        #               move ="position fen "+maxfen
+
+        # put('ucinewgame')
+        # get()
+
+        put(cmove)
+        # send move to engine & get engines move
+
+        put("go movetime " + movetime)
+        # time.sleep(6)
+        # text = get()
+        # put('stop')
+        text = sget()
+        print (text)
+        smove = text[9:13]
+        hint = text[21:25]
+        if maxchess.addTextMove(smove) != True:
+            stxt = "e" + str(maxchess.getReason()) + move
+            maxchess.printBoard()
+            sendboard(stxt)
+
+        else:
+            temp = fmove
+            fmove = temp + " " + smove
+            stx = smove + hint
+            sendboard(stx)
+            maxchess.printBoard()
+            # maxfen = maxchess.getFEN()
+            print ("computer move: " + smove)
+            return fmove
+
+
+def put(command):
+    print('\nyou:\n\t' + command)
+    engine.stdin.write(command + '\n')
+
+
+global skill
+global movetime
+global bmessage
+
+
+# assume new game
+def GameThread():
+    print ("\n Chess Program \n")
+    global skill
+    skill = "10"
+    global movetime
+    movetime = "6000"
+    fmove = newgame()
+    while True:
+
+        # Get  message from board
+        global bmessage
+        global moveEnded
+        global btxt
+        global chessBoardCalculatedMoveFlag
+        global chessBoardCalculatedMove
+
+        print("Make a move")
+        if chessBoardCalculatedMoveFlag == "true" : #OVDJE
+            bmessage = chessBoardCalculatedMove
+            chessBoardCalculatedMoveFlag = "false"
+
+            # Message options   Move, Newgame, level, style
+            code = bmessage[0]
+            # decide which function to call based on first letter of txt
+            fmove = fmove
+            if code == 'm':
+                fmove = bmove(fmove)
+            elif code == 'n':
+                newgame()
+            elif code == 'l':
+                level()
+            elif code == 's':
+                style()
+            else:
+                sendboard('error at option')
+
+            btxt = ''
+        time.sleep(10)
+
+
+
+global startMove
+startMove = ""
+global endMove
+endMove = ""
+global moveStarted
+moveStarted = "false"
+global moveEnded
+global step1
+global step2
+global step3
+step1 = "false"
+step2 = "false"
+step3 = "false"
+moveEnded = "false"
+
+
+def BoardThread():
+    for i in range(0, 4):  # for each of the 4 MCPs
+        bus.write_byte_data(DEVICE[i], IODIRA, 0xFF)
+        bus.write_byte_data(DEVICE[i], GPPUA, 0xFF)
+        bus.write_byte_data(DEVICE[i], IODIRB, 0xFF)
+        bus.write_byte_data(DEVICE[i], GPPUB, 0xFF)
+
+    while True:
+        for k in range(0, 4):
+            for l in range(2):  # for each MCP register A and B
+                a = bus.read_byte_data(DEVICE[k], GPIOn[l])
+                if a != mbrd[(k * 2) + l]:  # there has been a change
+                    global moveStarted
+                    global moveEnded
+                    c = a ^ mbrd[
+                        (k * 2) + l]  # bitwise operation copies the bit if it is set in one operand but not both.
+                    dirx = "Close"
+                    y = math.frexp(c)[1]  # calculates integer part of log base 2, which is binary bit position
+
+                    global endMove
+                    #endMove = chcol[(k * 2) + l] + str(y)
+                    if a > mbrd[(k * 2) + l]:
+                        dirx = "open"  # if the number gets bigger a 0 has changed to a 1
+
+                        moveStarted = "true"
+
+                        moveEnded = "false"
+                    else:
+
+                        moveStarted = "false"
+
+                        moveEnded = "true"
+                    #y = math.frexp(c)[1]  # calculates integer part of log base 2, which is binary bit position
+
+
+                    global startMove
+                    y = math.frexp(c)[1]  # calculates integer part of log base 2, which is binary bit position
+                    #startMove = chcol[(k * 2) + l] + str(y)
+
+                    print chcol[(k * 2) + l], y, dirx, l
+                    if dirx == "open":
+                        startMove = chcol[(k * 2) + l] + str(y)
+                    if dirx == "Close":
+                        endMove = chcol[(k * 2) + l] + str(y)
+                    mbrd[(k * 2) + l] = a  # update the current state of the board
+
+        if moveStarted == "true" and moveEnded == "false" and step1 == "false":
+            global step1
+            step1 = "true"
+        if moveStarted == "false" and moveEnded == "true" and step1 == "true":
+            global step1
+            step1 = "false"
+            btxt = "m" + startMove + endMove
+            global chessBoardCalculatedMove
+            global chessBoardCalculatedMoveFlag
+            chessBoardCalculatedMove = "m" + startMove + endMove
+            chessBoardCalculatedMoveFlag = "true"
+
+            print("Move detected: " + btxt)
+
+        time.sleep(1)
+
+
+t1 = threading.Thread(target=GameThread, args=[])
+t2 = threading.Thread(target=BoardThread, args=[])
+t1.start()
+time.sleep(10)
+t2.start()
+
+
+
